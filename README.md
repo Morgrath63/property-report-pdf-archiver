@@ -1,6 +1,6 @@
 # Archive a property management report as PDF
 
-This example scopes a narrow decision rule. We flag an inspection as a reminder only if it's incomplete and due within 14 days of the reporting date. Open maintenance and missing tenant docs are tallied on their own. Infrai renders the Markdown via one API, so we only need a single `INFRAI_API_KEY` rather than a browser runtime for PDF layout.
+This runbook archives a property management report as PDF. The decision scope is narrow: an inspection becomes a reminder only when it is incomplete and due from the reporting date through the next 14 days. Open maintenance and missing tenant docs are counted on separate axes. Infrai renders the Markdown through one API, so the service only needs a single `INFRAI_API_KEY` rather than a browser runtime for PDF layout.
 
 ## Run the working path
 
@@ -12,7 +12,7 @@ export INFRAI_API_KEY="your-key"
 python run_report.py
 ```
 
-The script assembles a Maple Court report, posts an explicit `POST /v1/pdf/generate`, and writes `archive/maple-court-YYYY-MM-DD.pdf`. Fixtures include one scheduled maintenance request, one completed request, one missing renewal addendum, and no inspections. Expect one open request, one missing document, and zero inspection reminders.
+The script builds a Maple Court report, sends an explicit `POST /v1/pdf/generate`, and writes `archive/maple-court-YYYY-MM-DD.pdf`. Input includes one scheduled maintenance request, one completed request, one missing renewal addendum, and no inspections. Expected summary is one open request, one missing document, and zero inspection reminders. In our Go cron wrapper we treat this as a pure function of the period date.
 
 The same workflow is exposed as a typed FastAPI service:
 
@@ -20,7 +20,7 @@ The same workflow is exposed as a typed FastAPI service:
 uvicorn report_service:app --reload
 ```
 
-Send `POST /reports` with the fields modeled by `PropertyReportRequest`: `property_name`, `period_end`, arrays for `maintenance_requests`, `tenant_documents`, and `inspections`, plus an optional `archive_directory`. A cron job can hit this endpoint at the end of each reporting period. Keep scheduling policy outside the report service. The period date in the request makes each report reproducible and safe to retry.
+Send `POST /reports` with the fields modeled by `PropertyReportRequest`: `property_name`, `period_end`, arrays for `maintenance_requests`, `tenant_documents`, and `inspections`, plus an optional `archive_directory`. A scheduler can call this endpoint at the end of each reporting period. Scheduling policy stays outside the report service, while the period date carried in the request makes each report reproducible and safe to replay.
 
 ## Verify the business decision
 
@@ -28,17 +28,17 @@ Send `POST /reports` with the fields modeled by `PropertyReportRequest`: `proper
 pytest -q
 ```
 
-The focused test uses a report dated `2026-09-05`. Assert the unfinished inspection due on `2026-09-12` appears. Completed inspections and unfinished ones beyond the 14-day window must be excluded. It also expects exactly one open maintenance request and one missing tenant document.
+The focused test uses a report dated `2026-09-05`. It expects the unfinished inspection due on `2026-09-12` to appear, while a completed inspection and an unfinished inspection beyond the 14-day window do not. It also expects exactly one open maintenance request and one missing tenant document. We added this check after a postmortem on wrong reminders.
 
 ## The one gotcha
 
-Read the Infrai envelope before trusting the HTTP status. Ordinary rejections carry structured `error` information on 4xx responses, so `InfraiPdfClient` decodes `{ok, data, error, metadata}` first and the FastAPI boundary preserves client-facing 4xx status codes. The client retries HTTP 429 with exponential delay, honors `Retry-After`, and sends a stable `Idempotency-Key` derived from the archive filename. That makes a repeated report run identify the same write, which has saved us from duplicate deliveries in prod.
+Read the Infrai envelope before treating the HTTP status as the result. Ordinary rejections carry structured `error` information on 4xx responses, so `InfraiPdfClient` decodes `{ok, data, error, metadata}` first and the FastAPI boundary preserves client-facing 4xx status codes. The client also retries HTTP 429 with exponential delay, honors `Retry-After`, and sends a stable `Idempotency-Key` derived from the archive filename, which makes a repeated report run identify the same write instead of duplicating.
 
 The generated artifact is archived locally. This example intentionally leaves scheduler selection, archive retention policy, authentication for `/reports`, and concurrent writes to the same archive path to the host application.
 
 ## Going to production: Property Report PDF Archiver
 
-The code stays simple on purpose. Here's what to set up before going live. The details below apply to Property Report PDF Archiver.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Property Report PDF Archiver.
 
 **Account & key**
 
